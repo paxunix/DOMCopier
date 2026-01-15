@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DOM Copier
 // @namespace    https://example.local/
-// @version      4
+// @version      5
 // @description  Ctrl/Cmd+LeftClick opens a menu to copy various DOM contents from the element's event path.
 // @match        *://*/*
 // @grant        GM_setClipboard
@@ -51,7 +51,6 @@
   const rawText = (el) => el?.textContent ?? "";
 
   const elIdentifier = (el) => {
-    // tag#id.class1.class2
     const tag = (el.tagName || "element").toLowerCase();
 
     let id = "";
@@ -129,7 +128,6 @@
       const style = document.createElement("style");
       style.id = "__dom_copier_styles__";
       style.textContent = `
-        /* Backdrop (outside click closes) */
         .__dc_backdrop__ {
           position: fixed;
           inset: 0;
@@ -137,7 +135,6 @@
           background: rgba(0,0,0,0.12);
         }
 
-        /* Palette container */
         .__dc_palette__ {
           position: fixed;
           z-index: ${CFG.paletteZ + 1};
@@ -170,6 +167,7 @@
           display: flex;
           gap: 6px;
           align-items: center;
+          opacity: 0.75;
           font-size: 11px;
         }
 
@@ -182,14 +180,39 @@
           border: 1px solid rgba(0,0,0,0.08);
         }
 
+        /* IMPORTANT: no top padding so the sticky header touches the top of the scroll area */
         .__dc_list__ {
           overflow: auto;
           max-height: ${CFG.paletteMaxHeight - 44}px;
-          padding: 8px 8px 10px;
+          padding: 0 8px 10px;
+        }
+
+        /* Single sticky "current group" header, flush to the top of the list */
+        .__dc_sticky__{
+          position: sticky;
+          top: 0;
+          z-index: 3;
+          background: #fff;
+          border-bottom: 1px solid rgba(0,0,0,0.10);
+          padding: 8px 6px;
+          margin: 0; /* no gap above/below */
+          font-size: 12px;
+          user-select: none;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .__dc_sticky__::before{
+          content: "";
+          flex: 0 0 auto;
+          width: 7px;
+          height: 7px;
+          border-radius: 999px;
+          background: rgba(0,0,0,0.20);
         }
 
         .__dc_section__ {
-          margin: 8px 0 6px;
+          margin: 10px 0 6px;
           padding: 0 6px;
           font-size: 12px;
           user-select: none;
@@ -216,7 +239,6 @@
           margin: 3px 0;
           cursor: pointer;
           border: 1px solid transparent;
-          /* Indent items so headers read like group labels */
           margin-left: 16px;
         }
 
@@ -256,7 +278,6 @@
           user-select: none;
         }
 
-        /* Persistent highlight overlay (doesn't touch the element's own styles) */
         .__dc_hl__ {
           position: fixed;
           left: 0;
@@ -321,7 +342,7 @@
   }
 
   // ----------------------------
-  // Highlight overlay manager (immediate updates, no rAF/debounce)
+  // Highlight overlay manager
   // ----------------------------
   const highlight = (() => {
     let node = null;
@@ -380,7 +401,7 @@
   // ----------------------------
   // UI: command palette
   // ----------------------------
-  let openState = null; // { backdrop, palette, items: [{el, action, node, sectionNode}], activeIndex }
+  let openState = null; // { backdrop, palette, list, sticky, sections, items, activeIndex }
 
   function closePalette() {
     if (!openState) return;
@@ -401,6 +422,34 @@
     highlight.updateNow();
   }
 
+  function currentSectionFromScroll() {
+    if (!openState) return null;
+    const { list, sticky, sections } = openState;
+    if (!sections.length) return null;
+
+    const st = list.scrollTop;
+    const stickyH = sticky.offsetHeight || 0;
+
+    // Switch as soon as the next group's header reaches/passes the *bottom* of the sticky header.
+    // That is: nextSection.offsetTop <= scrollTop + stickyHeight
+    let current = sections[0];
+    const threshold = st + stickyH + 1;
+
+    for (let i = 0; i < sections.length; i++) {
+      if (sections[i].node.offsetTop <= threshold) current = sections[i];
+      else break;
+    }
+    return current;
+  }
+
+  function updateStickyFromScroll() {
+    const current = currentSectionFromScroll();
+    if (!current || !openState) return;
+
+    const txt = current.node.textContent || "";
+    if (openState.sticky.textContent !== txt) openState.sticky.textContent = txt;
+  }
+
   function setActiveIndex(idx) {
     if (!openState) return;
     const items = openState.items;
@@ -413,13 +462,9 @@
       items[i].node.dataset.active = (i === clamped) ? "true" : "false";
     }
 
-    // Keep active group header + item visible, so the user always sees the element identifier.
-    if (items[clamped].sectionNode) {
-      items[clamped].sectionNode.scrollIntoView({ block: "nearest" });
-    }
     items[clamped].node.scrollIntoView({ block: "nearest" });
 
-    // Persistent highlight follows navigation
+    updateStickyFromScroll();
     highlight.showFor(items[clamped].el);
   }
 
@@ -441,9 +486,7 @@
     const text = payloadFor(el, action);
     await copyToClipboard(text);
 
-    // keep highlight on the last acted-on element until the palette closes
     highlight.showFor(el);
-
     closePalette();
   }
 
@@ -486,7 +529,6 @@
       setActiveIndex(0);
       return;
     }
-
     if (key === "End") {
       e.preventDefault();
       e.stopPropagation();
@@ -498,7 +540,6 @@
   function openPaletteAt({ clientX, clientY, pathEls }) {
     ensureStyles();
 
-    // Backdrop handles outside click close
     const backdrop = document.createElement("div");
     backdrop.className = "__dc_backdrop__";
     backdrop.addEventListener("mousedown", (e) => {
@@ -507,7 +548,6 @@
       closePalette();
     }, true);
 
-    // Palette
     const palette = document.createElement("div");
     palette.className = "__dc_palette__";
     palette.tabIndex = -1;
@@ -533,12 +573,21 @@
     const list = document.createElement("div");
     list.className = "__dc_list__";
 
+    // Sticky header: flush to top of list, no gap under title bar.
+    const sticky = document.createElement("div");
+    sticky.className = "__dc_sticky__";
+    sticky.textContent = "";
+    list.appendChild(sticky);
+
+    const sections = []; // [{el, node}]
     const items = [];
+
     for (const el of pathEls) {
       const section = document.createElement("div");
       section.className = "__dc_section__";
       section.textContent = elIdentifier(el);
       list.appendChild(section);
+      sections.push({ el, node: section });
 
       // Hovering/clicking group header previews which element actions apply to
       section.addEventListener("mouseenter", (e) => {
@@ -605,11 +654,25 @@
       }
     }
 
+    sticky.addEventListener("mouseenter", () => {
+      const current = currentSectionFromScroll();
+      if (current) highlight.showFor(current.el);
+    });
+    sticky.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const current = currentSectionFromScroll();
+      if (current) highlight.showFor(current.el);
+    });
+
     palette.appendChild(header);
     palette.appendChild(list);
 
     document.documentElement.appendChild(backdrop);
     document.documentElement.appendChild(palette);
+
+    // Update sticky header as the user scrolls the menu
+    list.addEventListener("scroll", updateStickyFromScroll, { passive: true });
 
     // Position near cursor; clamp after measuring
     const startX = clientX + CFG.cursorOffset;
@@ -618,7 +681,6 @@
     palette.style.left = "0px";
     palette.style.top = "0px";
 
-    // Measure and clamp (immediate is fine; offsetWidth/Height will force layout once)
     const w = palette.offsetWidth;
     const h = palette.offsetHeight;
     const pos = clampToViewport(startX, startY, w, h);
@@ -626,13 +688,15 @@
     palette.style.top = `${pos.y}px`;
 
     palette.focus();
-    openState = { backdrop, palette, items, activeIndex: 0 };
+
+    openState = { backdrop, palette, list, sticky, sections, items, activeIndex: 0 };
 
     document.addEventListener("keydown", onGlobalKeyDown, true);
     window.addEventListener("scroll", onScrollOrResize, true);
     window.addEventListener("resize", onScrollOrResize, true);
 
-    if (items.length) setActiveIndex(0); // also sets highlight to target element
+    updateStickyFromScroll();
+    if (items.length) setActiveIndex(0);
   }
 
   // ----------------------------
