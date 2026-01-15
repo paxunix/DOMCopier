@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DOM Copier
 // @namespace    https://example.local/
-// @version      3
+// @version      4
 // @description  Ctrl/Cmd+LeftClick opens a menu to copy various DOM contents from the element's event path.
 // @match        *://*/*
 // @grant        GM_setClipboard
@@ -27,12 +27,10 @@
     paletteMaxHeight: 360,
     cursorOffset: 12,
 
-    // Highlight pulse
-    pulseMs: 1500,
-
-    // Key repeat niceties
-    scrollIntoViewBlock: "nearest",
-    scrollIntoViewInline: "nearest",
+    // Highlight overlay
+    highlightZ: 2147483646, // under palette but above page
+    highlightRadiusPx: 10,
+    highlightPaddingPx: 2, // expand rect slightly
   };
 
   // ----------------------------
@@ -75,27 +73,20 @@
   async function copyToClipboard(text) {
     const value = String(text ?? "");
 
-    // Modern API (best effort)
     try {
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(value);
         return true;
       }
-    } catch (_) {
-      // ignore
-    }
+    } catch (_) {}
 
-    // Preferred fallback
     try {
       if (typeof GM_setClipboard === "function") {
         GM_setClipboard(value, "text");
         return true;
       }
-    } catch (_) {
-      // ignore
-    }
+    } catch (_) {}
 
-    // Last-ditch fallback
     try {
       const ta = document.createElement("textarea");
       ta.value = value;
@@ -265,36 +256,26 @@
           user-select: none;
         }
 
-        /* Noticeable pulse: outline + "border-like" box-shadow + inset background flash, then shrink/fade */
-        @keyframes __dc_pulse__ {
-          0% {
-            outline: 0px solid rgba(255, 179, 0, 0);
-            box-shadow:
-              0 0 0 0 rgba(255, 179, 0, 0),
-              inset 0 0 0 0 rgba(255, 230, 120, 0);
-          }
-          18% {
-            outline: 3px solid rgba(255, 179, 0, 0.98);
-            box-shadow:
-              0 0 0 10px rgba(255, 179, 0, 0.65),
-              inset 0 0 0 9999px rgba(255, 230, 120, 0.45);
-          }
-          40% {
-            outline: 3px solid rgba(255, 179, 0, 0.90);
-            box-shadow:
-              0 0 0 6px rgba(255, 179, 0, 0.55),
-              inset 0 0 0 9999px rgba(255, 230, 120, 0.36);
-          }
-          100% {
-            outline: 0px solid rgba(255, 179, 0, 0);
-            box-shadow:
-              0 0 0 0 rgba(255, 179, 0, 0),
-              inset 0 0 0 0 rgba(255, 230, 120, 0);
-          }
+        /* Persistent highlight overlay (doesn't touch the element's own styles) */
+        .__dc_hl__ {
+          position: fixed;
+          left: 0;
+          top: 0;
+          width: 0;
+          height: 0;
+          z-index: ${CFG.highlightZ};
+          pointer-events: none;
+          border-radius: ${CFG.highlightRadiusPx}px;
+          border: 3px solid rgba(255, 179, 0, 0.98);
+          box-shadow:
+            0 0 0 10px rgba(255, 179, 0, 0.55),
+            0 10px 30px rgba(0,0,0,0.22);
+          background: rgba(255, 230, 120, 0.35);
+          opacity: 0;
+          transition: opacity 80ms linear;
         }
-
-        .__dc_pulse__ {
-          animation: __dc_pulse__ ${CFG.pulseMs}ms ease-out forwards !important;
+        .__dc_hl__[data-on="true"] {
+          opacity: 1;
         }
       `;
       document.documentElement.appendChild(style);
@@ -325,7 +306,6 @@
       { kind: "outerHTML", label: "outerHTML", preview: el?.outerHTML ?? "" },
     ];
 
-    // Every attribute present
     if (el?.attributes?.length) {
       for (const a of Array.from(el.attributes)) {
         if (!a?.name) continue;
@@ -337,9 +317,65 @@
         });
       }
     }
-
     return actions;
   }
+
+  // ----------------------------
+  // Highlight overlay manager (immediate updates, no rAF/debounce)
+  // ----------------------------
+  const highlight = (() => {
+    let node = null;
+    let currentEl = null;
+
+    function ensure() {
+      if (node) return node;
+      node = document.createElement("div");
+      node.className = "__dc_hl__";
+      node.dataset.on = "false";
+      document.documentElement.appendChild(node);
+      return node;
+    }
+
+    function hide() {
+      if (!node) return;
+      node.dataset.on = "false";
+      currentEl = null;
+    }
+
+    function updateNow() {
+      if (!node || !currentEl) return;
+
+      const r = currentEl.getBoundingClientRect();
+      const pad = CFG.highlightPaddingPx;
+
+      if (r.width <= 0 || r.height <= 0) {
+        hide();
+        return;
+      }
+
+      const x = r.left - pad;
+      const y = r.top - pad;
+      const w = r.width + pad * 2;
+      const h = r.height + pad * 2;
+
+      node.style.transform = `translate(${x}px, ${y}px)`;
+      node.style.width = `${w}px`;
+      node.style.height = `${h}px`;
+      node.dataset.on = "true";
+    }
+
+    function showFor(el) {
+      if (!isElement(el)) {
+        hide();
+        return;
+      }
+      ensure();
+      currentEl = el;
+      updateNow();
+    }
+
+    return { showFor, hide, updateNow };
+  })();
 
   // ----------------------------
   // UI: command palette
@@ -350,43 +386,20 @@
     if (!openState) return;
     const { backdrop, palette } = openState;
     openState = null;
+
+    highlight.hide();
+
     backdrop?.remove();
     palette?.remove();
     document.removeEventListener("keydown", onGlobalKeyDown, true);
+    window.removeEventListener("scroll", onScrollOrResize, true);
+    window.removeEventListener("resize", onScrollOrResize, true);
   }
 
-  function pulseHighlight(el) {
-    if (!isElement(el)) return;
-
-    // Re-trigger animation reliably
-    el.classList.remove("__dc_pulse__");
-    // Force reflow
-    // eslint-disable-next-line no-unused-expressions
-    el.offsetHeight;
-    el.classList.add("__dc_pulse__");
-
-    window.setTimeout(() => {
-      el.classList.remove("__dc_pulse__");
-    }, CFG.pulseMs + 60);
+  function onScrollOrResize() {
+    if (!openState) return;
+    highlight.updateNow();
   }
-
-  // Debounced preview pulsing for rapid keyboard repeat / hover movement.
-  // Coalesces bursts into a single pulse after a short pause.
-  const previewPulse = (() => {
-    let t = null;
-    let lastEl = null;
-    const delay = 70; // ms
-
-    return (el) => {
-      if (!isElement(el)) return;
-      lastEl = el;
-      if (t) clearTimeout(t);
-      t = setTimeout(() => {
-        t = null;
-        pulseHighlight(lastEl);
-      }, delay);
-    };
-  })();
 
   function setActiveIndex(idx) {
     if (!openState) return;
@@ -406,8 +419,8 @@
     }
     items[clamped].node.scrollIntoView({ block: "nearest" });
 
-    // Preview highlight: hovering/cursoring indicates which element the action would apply to
-    previewPulse(items[clamped].el);
+    // Persistent highlight follows navigation
+    highlight.showFor(items[clamped].el);
   }
 
   function activateIndex(idx) {
@@ -422,13 +435,15 @@
     const action = item.action;
 
     try {
-      el?.scrollIntoView?.({ block: CFG.scrollIntoViewBlock, inline: CFG.scrollIntoViewInline });
+      el?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
     } catch (_) {}
 
     const text = payloadFor(el, action);
     await copyToClipboard(text);
 
-    pulseHighlight(el);
+    // keep highlight on the last acted-on element until the palette closes
+    highlight.showFor(el);
+
     closePalette();
   }
 
@@ -471,6 +486,7 @@
       setActiveIndex(0);
       return;
     }
+
     if (key === "End") {
       e.preventDefault();
       e.stopPropagation();
@@ -494,7 +510,7 @@
     // Palette
     const palette = document.createElement("div");
     palette.className = "__dc_palette__";
-    palette.tabIndex = -1; // focusable
+    palette.tabIndex = -1;
 
     const header = document.createElement("div");
     header.className = "__dc_header__";
@@ -525,10 +541,10 @@
       list.appendChild(section);
 
       // Hovering/clicking group header previews which element actions apply to
-      section.addEventListener("mousemove", (e) => {
+      section.addEventListener("mouseenter", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        previewPulse(el);
+        highlight.showFor(el);
       });
       section.addEventListener("mousedown", (e) => {
         e.preventDefault();
@@ -537,7 +553,7 @@
       section.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        previewPulse(el);
+        highlight.showFor(el);
       });
 
       const actions = buildActionsForElement(el);
@@ -567,8 +583,7 @@
         node.appendChild(top);
         node.appendChild(hint);
 
-        node.addEventListener("mousemove", () => {
-          // Hover moves active selection (and previews via setActiveIndex)
+        node.addEventListener("mouseenter", () => {
           const idx = items.findIndex((it) => it.node === node);
           if (idx >= 0) setActiveIndex(idx);
         });
@@ -603,23 +618,21 @@
     palette.style.left = "0px";
     palette.style.top = "0px";
 
-    requestAnimationFrame(() => {
-      const r = palette.getBoundingClientRect();
-      const pos = clampToViewport(startX, startY, r.width, r.height);
-      palette.style.left = `${pos.x}px`;
-      palette.style.top = `${pos.y}px`;
-      palette.focus();
-      setActiveIndex(0);
-    });
+    // Measure and clamp (immediate is fine; offsetWidth/Height will force layout once)
+    const w = palette.offsetWidth;
+    const h = palette.offsetHeight;
+    const pos = clampToViewport(startX, startY, w, h);
+    palette.style.left = `${pos.x}px`;
+    palette.style.top = `${pos.y}px`;
+
+    palette.focus();
+    openState = { backdrop, palette, items, activeIndex: 0 };
 
     document.addEventListener("keydown", onGlobalKeyDown, true);
+    window.addEventListener("scroll", onScrollOrResize, true);
+    window.addEventListener("resize", onScrollOrResize, true);
 
-    openState = {
-      backdrop,
-      palette,
-      items,
-      activeIndex: 0,
-    };
+    if (items.length) setActiveIndex(0); // also sets highlight to target element
   }
 
   // ----------------------------
@@ -629,11 +642,8 @@
     if (!CFG.trigger(e)) return;
     if (openState) return;
 
-    // Capture phase for robustness (sites that stop propagation)
-    // Still use composedPath ordering (target -> ancestors)
     const path = typeof e.composedPath === "function" ? e.composedPath() : [];
     const els = path.filter(isElement);
-
     if (!els.length) return;
 
     e.preventDefault();
