@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         DOM Copier
 // @namespace    https://example.local/
-// @version      2
-// @description  Ctrl/Cmd+LeftClick opens a command-palette menu to copy various DOM contents from the event path.
+// @version      3
+// @description  Ctrl/Cmd+LeftClick opens a menu to copy various DOM contents from the element's event path.
 // @match        *://*/*
 // @grant        GM_setClipboard
 // ==/UserScript==
@@ -15,7 +15,7 @@
   // ----------------------------
   const CFG = {
     trigger: (e) =>
-      e.button === 0 && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey,
+      e.button === 2 && (e.ctrlKey || e.metaKey) && !e.altKey && e.shiftKey,
 
     maxSnippetLen: 90,
     maxIdLen: 20,
