@@ -173,14 +173,12 @@
 
         .__dc_title__ {
           font-size: 12px;
-          opacity: 0.85;
         }
 
         .__dc_keys__ {
           display: flex;
           gap: 6px;
           align-items: center;
-          opacity: 0.75;
           font-size: 11px;
         }
 
@@ -203,7 +201,6 @@
           margin: 8px 0 6px;
           padding: 0 6px;
           font-size: 12px;
-          opacity: 0.75;
           user-select: none;
           display: flex;
           align-items: center;
@@ -256,7 +253,6 @@
 
         .__dc_preview__ {
           font-size: 12px;
-          opacity: 0.82;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
@@ -264,7 +260,6 @@
 
         .__dc_hint__ {
           font-size: 11px;
-          opacity: 0.65;
           margin-top: 2px;
           user-select: none;
         }
