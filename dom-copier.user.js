@@ -259,6 +259,7 @@
         }
 
         .__dc_hint__ {
+          color: #d6d6d6;
           font-size: 11px;
           margin-top: 2px;
           user-select: none;
@@ -561,7 +562,7 @@
 
         const hint = document.createElement("div");
         hint.className = "__dc_hint__";
-        hint.textContent = "Click or press Enter to copy + highlight";
+        hint.textContent = "Click/Enter to copy";
 
         node.appendChild(top);
         node.appendChild(hint);
