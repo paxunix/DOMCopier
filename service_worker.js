@@ -1,12 +1,28 @@
 const MENU_ID = "dom-copier-open";
 
-chrome.runtime.onInstalled.addListener(() => {
+async function rebuildMenus() {
+  await chrome.contextMenus.removeAll();
+
   chrome.contextMenus.create({
     id: MENU_ID,
     title: "DOM Copier",
-    contexts: ["page", "frame", "selection", "link", "image", "video", "audio"]
+    contexts: ["all"]
   });
+}
+
+// Run on install/update
+chrome.runtime.onInstalled.addListener(() => {
+  rebuildMenus();
 });
+
+// Run on every browser startup (and often after extension reload)
+chrome.runtime.onStartup.addListener(() => {
+  rebuildMenus();
+});
+
+// Also run immediately when the service worker starts up
+rebuildMenus();
+
 
 function sendMessageToFrame(tabId, frameId, message) {
   return new Promise((resolve) => {
