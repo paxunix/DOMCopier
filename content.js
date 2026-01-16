@@ -20,7 +20,7 @@
     highlightRadiusPx: 10,
     highlightPaddingPx: 2,
 
-    // Consider ctx stale after this (should align with SW expectations)
+    // Context freshness
     ctxTtlMs: 30_000
   };
 
@@ -63,7 +63,6 @@
   async function copyToClipboard(text) {
     const value = String(text ?? "");
 
-    // Most modern browsers: should work because the extension context menu click is a user gesture.
     try {
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(value);
@@ -71,7 +70,6 @@
       }
     } catch (_) {}
 
-    // Fallback
     try {
       const ta = document.createElement("textarea");
       ta.value = value;
@@ -92,7 +90,8 @@
   function clampToViewport(x, y, w, h, pad = 8) {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    let nx = x, ny = y;
+    let nx = x,
+      ny = y;
 
     if (nx + w + pad > vw) nx = vw - w - pad;
     if (ny + h + pad > vh) ny = vh - h - pad;
@@ -100,6 +99,33 @@
     if (ny < pad) ny = pad;
 
     return { x: nx, y: ny };
+  }
+
+  // Choose target using hit-testing
+  function pickTargetAtPoint(clientX, clientY) {
+    const list = typeof document.elementsFromPoint === "function"
+      ? document.elementsFromPoint(clientX, clientY)
+      : [];
+
+    for (const n of list) {
+      if (isElement(n)) return n;
+    }
+    const one = document.elementFromPoint?.(clientX, clientY);
+    return isElement(one) ? one : null;
+  }
+
+  // Build ancestor chain from target -> ... -> body (inclusive)
+  function buildAncestorPath(target) {
+    const out = [];
+    let cur = target;
+    while (cur && isElement(cur)) {
+      out.push(cur);
+      if (cur === document.body) break;
+      cur = cur.parentElement;
+    }
+    // If somehow body wasn't reached but exists, add it.
+    if (document.body && out[out.length - 1] !== document.body) out.push(document.body);
+    return out;
   }
 
   // ----------------------------
@@ -145,7 +171,7 @@
           user-select: none;
         }
 
-        .__dc_title__ { font-size: 12px; }
+        .__dc_title__ { font-size: 12px; opacity: 0.85; }
 
         .__dc_keys__ {
           display: flex;
@@ -170,7 +196,6 @@
           padding: 0 8px 10px;
         }
 
-        /* Sticky "current group" header (as you currently have it) */
         .__dc_sticky__{
           position: sticky;
           top: 0;
@@ -180,6 +205,7 @@
           padding: 8px 6px;
           margin: 0;
           font-size: 12px;
+          opacity: 0.92;
           user-select: none;
           display: flex;
           align-items: center;
@@ -198,6 +224,7 @@
           margin: 10px 0 6px;
           padding: 0 6px;
           font-size: 12px;
+          opacity: 0.75;
           user-select: none;
           display: flex;
           align-items: center;
@@ -362,7 +389,7 @@
   // ----------------------------
   // UI: command palette
   // ----------------------------
-  let openState = null; // { backdrop, palette, list, sticky, sections, items, activeIndex }
+  let openState = null;
 
   function closePalette() {
     if (!openState) return;
@@ -653,25 +680,19 @@
   }
 
   // ----------------------------
-  // Context capture (per-frame)
+  // Context capture (per-frame): store ONLY coordinates + timestamp
   // ----------------------------
-  // Store *actual Element objects* from composedPath so we can reuse without elementFromPoint.
-  let lastCtx = null; // { t, clientX, clientY, pathEls }
+  let lastCtx = null; // { t, clientX, clientY }
 
   function captureContextmenu(e) {
-    const path = typeof e.composedPath === "function" ? e.composedPath() : [];
-    const pathEls = path.filter(isElement);
-    if (!pathEls.length) return;
-
+    // Observe only; do not prevent default.
     lastCtx = {
       t: Date.now(),
       clientX: e.clientX,
-      clientY: e.clientY,
-      pathEls
+      clientY: e.clientY
     };
   }
 
-  // DO NOT preventDefault; we only observe.
   window.addEventListener("contextmenu", captureContextmenu, { capture: true, passive: true });
   window.addEventListener(
     "mousedown",
@@ -693,23 +714,30 @@
           t: hasCtx ? lastCtx.t : 0,
           ageMs: hasCtx ? (now - lastCtx.t) : 0
         });
-        return; // synchronous response
+        return;
       }
 
       if (msg?.cmd === "DC_OPEN_FROM_CTX") {
         const now = Date.now();
         const hasCtx = !!lastCtx && (now - lastCtx.t) <= CFG.ctxTtlMs;
 
-        // If SW provided a specific timestamp, ensure it matches so only the chosen frame opens.
+        // Only the SW-chosen frame should open.
         if (!hasCtx || (typeof msg.t === "number" && lastCtx.t !== msg.t)) {
           sendResponse({ ok: true, opened: false });
           return;
         }
 
+        const target = pickTargetAtPoint(lastCtx.clientX, lastCtx.clientY);
+        if (!target) {
+          sendResponse({ ok: true, opened: false, reason: "no-target" });
+          return;
+        }
+
+        const pathEls = buildAncestorPath(target);
         openPaletteAt({
           clientX: lastCtx.clientX,
           clientY: lastCtx.clientY,
-          pathEls: lastCtx.pathEls
+          pathEls
         });
 
         sendResponse({ ok: true, opened: true });
