@@ -171,7 +171,7 @@
           user-select: none;
         }
 
-        .__dc_title__ { font-size: 12px; opacity: 0.85; }
+        .__dc_title__ { font-size: 12px; }
 
         .__dc_keys__ {
           display: flex;
@@ -205,7 +205,6 @@
           padding: 8px 6px;
           margin: 0;
           font-size: 12px;
-          opacity: 0.92;
           user-select: none;
           display: flex;
           align-items: center;
@@ -224,7 +223,6 @@
           margin: 10px 0 6px;
           padding: 0 6px;
           font-size: 12px;
-          opacity: 0.75;
           user-select: none;
           display: flex;
           align-items: center;
@@ -265,12 +263,11 @@
         .__dc_kind__ { font-weight: 600; font-size: 12px; }
         .__dc_preview__ {
           font-size: 12px;
-          opacity: 0.82;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
         }
-        .__dc_hint__ { font-size: 11px; opacity: 0.65; margin-top: 2px; user-select: none; }
+        .__dc_hint__ { font-size: 11px; opacity: 0.2; margin-top: 2px; user-select: none; }
 
         .__dc_hl__ {
           position: fixed;
