@@ -197,49 +197,36 @@
         .__dc_list__ {
           overflow: auto;
           max-height: ${CFG.paletteMaxHeight - 44}px;
-          padding: 0 8px 10px;
+          padding: 6px 8px 10px;
         }
 
-        .__dc_sticky__{
-          position: sticky;
-          top: 0;
-          z-index: 3;
-          background: #fff;
-          border-bottom: 1px solid rgba(0,0,0,0.10);
-          padding: 8px 6px;
-          margin: 0;
-          font-size: 12px;
-          user-select: none;
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        }
-        .__dc_sticky__::before{
-          content: "";
-          width: 7px;
-          height: 7px;
-          border-radius: 999px;
-          background: rgba(0,0,0,0.20);
-          flex: 0 0 auto;
+        .__dc_group__ {
+          margin: 6px 0;
+          padding: 0;
+          border: 0;
         }
 
         .__dc_section__ {
+          list-style: none;
           margin: 10px 0 6px;
-          padding: 0 6px;
+          padding: 6px 6px;
           font-size: 12px;
           user-select: none;
           display: flex;
           align-items: center;
           gap: 8px;
+          cursor: pointer;
         }
+        .__dc_section__::-webkit-details-marker { display: none; }
         .__dc_section__::before{
-          content: "";
+          content: "▸";
+          font-size: 12px;
+          width: 12px;
           width: 7px;
-          height: 7px;
-          border-radius: 999px;
-          background: rgba(0,0,0,0.20);
+          color: rgba(0,0,0,0.45);
           flex: 0 0 auto;
         }
+        .__dc_group__[open] > .__dc_section__::before { content: "▾"; }
 
         .__dc_item__ {
           display: flex;
@@ -414,31 +401,21 @@
     highlight.updateNow();
   }
 
-  function currentSectionFromScroll() {
-    if (!openState) return null;
-    const { list, sticky, sections } = openState;
-    if (!sections.length) return null;
+  function ensureItemVisible(node) {
+    if (!openState || !node) return;
+    const { list } = openState;
+    const lr = list.getBoundingClientRect();
+    const nr = node.getBoundingClientRect();
+    const pad = 6;
 
-    const st = list.scrollTop;
-    const stickyH = sticky.offsetHeight || 0;
-    const threshold = st + stickyH + 1;
-
-    let current = sections[0];
-    for (let i = 0; i < sections.length; i++) {
-      if (sections[i].node.offsetTop <= threshold) current = sections[i];
-      else break;
+    if (nr.top < lr.top + pad) {
+      list.scrollTop -= (lr.top + pad - nr.top);
+    } else if (nr.bottom > lr.bottom - pad) {
+      list.scrollTop += (nr.bottom - (lr.bottom - pad));
     }
-    return current;
   }
 
-  function updateStickyFromScroll() {
-    const current = currentSectionFromScroll();
-    if (!current || !openState) return;
-    const txt = current.node.textContent || "";
-    if (openState.sticky.textContent !== txt) openState.sticky.textContent = txt;
-  }
-
-  function setActiveIndex(idx) {
+  function setActiveIndex(idx, { scroll = true } = {}) {
     if (!openState) return;
     const items = openState.items;
     if (!items.length) return;
@@ -450,9 +427,7 @@
       items[i].node.dataset.active = (i === clamped) ? "true" : "false";
     }
 
-    items[clamped].node.scrollIntoView({ block: "nearest" });
-
-    updateStickyFromScroll();
+    if (scroll) ensureItemVisible(items[clamped].node);
     highlight.showFor(items[clamped].el);
   }
 
@@ -561,33 +536,27 @@
     const list = document.createElement("div");
     list.className = "__dc_list__";
 
-    const sticky = document.createElement("div");
-    sticky.className = "__dc_sticky__";
-    sticky.textContent = "";
-    list.appendChild(sticky);
-
     const sections = [];
     const items = [];
 
+    const targetEl = pathEls[0];
+
     for (const el of pathEls) {
-      const section = document.createElement("div");
+      const group = document.createElement("details");
+      group.className = "__dc_group__";
+      if (el === targetEl) group.open = true;
+
+      const section = document.createElement("summary");
       section.className = "__dc_section__";
       section.textContent = elIdentifier(el);
-      list.appendChild(section);
+      group.appendChild(section);
+      list.appendChild(group);
       sections.push({ el, node: section });
 
-      section.addEventListener("mouseenter", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
+      section.addEventListener("mouseenter", () => {
         highlight.showFor(el);
       });
-      section.addEventListener("mousedown", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-      }, true);
-      section.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
+      section.addEventListener("click", () => {
         highlight.showFor(el);
       });
 
@@ -620,7 +589,7 @@
 
         node.addEventListener("mouseenter", () => {
           const idx = items.findIndex((it) => it.node === node);
-          if (idx >= 0) setActiveIndex(idx);
+          if (idx >= 0) setActiveIndex(idx, { scroll: false });
         });
 
         node.addEventListener("mousedown", (e) => {
@@ -635,29 +604,16 @@
           if (idx >= 0) activateIndex(idx);
         });
 
-        list.appendChild(node);
+        group.appendChild(node);
         items.push({ el, action, node });
       }
     }
-
-    sticky.addEventListener("mouseenter", () => {
-      const current = currentSectionFromScroll();
-      if (current) highlight.showFor(current.el);
-    });
-    sticky.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const current = currentSectionFromScroll();
-      if (current) highlight.showFor(current.el);
-    });
 
     palette.appendChild(header);
     palette.appendChild(list);
 
     root.appendChild(backdrop);
     root.appendChild(palette);
-
-    list.addEventListener("scroll", updateStickyFromScroll, { passive: true });
 
     const startX = clientX + CFG.cursorOffset;
     const startY = clientY + CFG.cursorOffset;
@@ -673,13 +629,12 @@
 
     palette.focus();
 
-    openState = { backdrop, palette, list, sticky, sections, items, activeIndex: 0 };
+    openState = { backdrop, palette, list, sections, items, activeIndex: 0 };
 
     document.addEventListener("keydown", onGlobalKeyDown, true);
     window.addEventListener("scroll", onScrollOrResize, true);
     window.addEventListener("resize", onScrollOrResize, true);
 
-    updateStickyFromScroll();
     if (items.length) setActiveIndex(0);
   }
 
