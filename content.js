@@ -132,14 +132,18 @@
   // Styles
   // ----------------------------
   const ensureStyles = (() => {
-    let installed = false;
+    let shadowRoot = null;
     return () => {
-      if (installed) return;
-      installed = true;
+      if (shadowRoot) return shadowRoot;
+
+      const host = document.createElement("div");
+      host.id = "__dom_copier_root__";
+      shadowRoot = host.attachShadow({ mode: "closed" });
 
       const style = document.createElement("style");
-      style.id = "__dom_copier_styles__";
       style.textContent = `
+        :host { all: initial; }
+
         .__dc_backdrop__ {
           position: fixed;
           inset: 0;
@@ -288,7 +292,9 @@
         }
         .__dc_hl__[data-on="true"] { opacity: 1; }
       `;
-      document.documentElement.appendChild(style);
+      shadowRoot.appendChild(style);
+      document.documentElement.appendChild(host);
+      return shadowRoot;
     };
   })();
 
@@ -340,10 +346,11 @@
 
     function ensure() {
       if (node) return node;
+      const root = ensureStyles();
       node = document.createElement("div");
       node.className = "__dc_hl__";
       node.dataset.on = "false";
-      document.documentElement.appendChild(node);
+      root.appendChild(node);
       return node;
     }
 
@@ -519,7 +526,7 @@
 
   function openPaletteAt({ clientX, clientY, pathEls }) {
     if (openState) return;
-    ensureStyles();
+    const root = ensureStyles();
 
     const backdrop = document.createElement("div");
     backdrop.className = "__dc_backdrop__";
@@ -647,8 +654,8 @@
     palette.appendChild(header);
     palette.appendChild(list);
 
-    document.documentElement.appendChild(backdrop);
-    document.documentElement.appendChild(palette);
+    root.appendChild(backdrop);
+    root.appendChild(palette);
 
     list.addEventListener("scroll", updateStickyFromScroll, { passive: true });
 
